@@ -1,0 +1,558 @@
+// OnlyFeets - Prisma Schema
+// Database: PostgreSQL
+
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "postgresql"
+  url      = env("DATABASE_URL")
+}
+
+// ─── ENUMS ────────────────────────────────────────────────────────────────────
+
+enum Role {
+  FAN
+  CREATOR
+  ADMIN
+}
+
+enum SubscriptionStatus {
+  ACTIVE
+  CANCELLED
+  EXPIRED
+  TRIAL
+  PAST_DUE
+}
+
+enum MediaType {
+  IMAGE
+  VIDEO
+  AUDIO
+}
+
+enum TransactionType {
+  SUBSCRIPTION
+  TIP
+  PPV_POST
+  PPV_MESSAGE
+  WITHDRAWAL
+  REFUND
+  REFERRAL_COMMISSION
+}
+
+enum TransactionStatus {
+  PENDING
+  COMPLETED
+  FAILED
+  REFUNDED
+}
+
+enum NotificationType {
+  NEW_SUBSCRIBER
+  NEW_TIP
+  NEW_COMMENT
+  NEW_LIKE
+  NEW_MESSAGE
+  PPV_UNLOCK
+  WITHDRAWAL_APPROVED
+  LIVE_STARTED
+  POST_SCHEDULED
+}
+
+enum WithdrawalMethod {
+  BANK_TRANSFER
+  PAYPAL
+  CRYPTO_USDT
+  CRYPTO_BTC
+}
+
+enum WithdrawalStatus {
+  PENDING
+  PROCESSING
+  COMPLETED
+  REJECTED
+}
+
+enum LiveStatus {
+  SCHEDULED
+  LIVE
+  ENDED
+}
+
+// ─── MODELS ───────────────────────────────────────────────────────────────────
+
+model User {
+  id              String   @id @default(cuid())
+  email           String   @unique
+  username        String   @unique
+  passwordHash    String
+  role            Role     @default(FAN)
+  avatarUrl       String?
+  coverUrl        String?
+  displayName     String?
+  bio             String?
+  website         String?
+  location        String?
+  isVerified      Boolean  @default(false)
+  isEmailVerified Boolean  @default(false)
+  twoFactorSecret String?
+  twoFactorEnabled Boolean @default(false)
+  isActive        Boolean  @default(true)
+  isBanned        Boolean  @default(false)
+  banReason       String?
+  lastSeenAt      DateTime?
+  createdAt       DateTime @default(now())
+  updatedAt       DateTime @updatedAt
+
+  // Relations
+  creatorProfile    CreatorProfile?
+  subscriptions     Subscription[]   @relation("SubscriberSubscriptions")
+  subscribers       Subscription[]   @relation("CreatorSubscriptions")
+  posts             Post[]
+  sentMessages      Message[]        @relation("SentMessages")
+  receivedMessages  Message[]        @relation("ReceivedMessages")
+  tipsGiven         Tip[]            @relation("TipsGiven")
+  tipsReceived      Tip[]            @relation("TipsReceived")
+  transactions      Transaction[]
+  notifications     Notification[]
+  comments          Comment[]
+  likes             Like[]
+  blockedUsers      BlockedUser[]    @relation("Blocker")
+  blockedByUsers    BlockedUser[]    @relation("Blocked")
+  referralsMade     Referral[]       @relation("Referrer")
+  referredBy        Referral?        @relation("Referred")
+  withdrawals       Withdrawal[]
+  liveStreams       LiveStream[]
+  savedPosts        SavedPost[]
+  verificationDocs  VerificationDoc[]
+  deviceTokens      DeviceToken[]
+  refreshTokens     RefreshToken[]
+  kycVerification   KycVerification?
+  wallet            Wallet?
+
+  @@map("users")
+}
+
+model CreatorProfile {
+  id                  String   @id @default(cuid())
+  userId              String   @unique
+  subscriptionPrice   Decimal  @default(9.99) @db.Decimal(10, 2)
+  trialDays           Int      @default(0)
+  totalEarnings       Decimal  @default(0) @db.Decimal(10, 2)
+  pendingBalance      Decimal  @default(0) @db.Decimal(10, 2)
+  availableBalance    Decimal  @default(0) @db.Decimal(10, 2)
+  subscriberCount     Int      @default(0)
+  totalPosts          Int      @default(0)
+  totalLikes          Int      @default(0)
+  isPublic            Boolean  @default(true)
+  showSubscriberCount Boolean  @default(true)
+  showPostCount       Boolean  @default(true)
+  welcomeMessage      String?
+  thankYouMessage     String?
+  commissionRate      Decimal  @default(20) @db.Decimal(5, 2) // Platform takes 20%
+  payoutMinimum       Decimal  @default(20) @db.Decimal(10, 2)
+  blockedCountries    String[] @default([])
+  createdAt           DateTime @default(now())
+  updatedAt           DateTime @updatedAt
+
+  user        User          @relation(fields: [userId], references: [id], onDelete: Cascade)
+  tipMenuItems TipMenuItem[]
+  promotions  Promotion[]
+  bundles     Bundle[]
+
+  @@map("creator_profiles")
+}
+
+model Subscription {
+  id                     String             @id @default(cuid())
+  subscriberId           String
+  creatorId              String
+  status                 SubscriptionStatus @default(ACTIVE)
+  price                  Decimal            @db.Decimal(10, 2)
+  startedAt              DateTime           @default(now())
+  expiresAt              DateTime
+  cancelledAt            DateTime?
+  stripeSubscriptionId   String?            @unique
+  stripeCustomerId       String?
+  isRenewing             Boolean            @default(true)
+  promotionId            String?
+  createdAt              DateTime           @default(now())
+  updatedAt              DateTime           @updatedAt
+
+  subscriber  User       @relation("SubscriberSubscriptions", fields: [subscriberId], references: [id])
+  creator     User       @relation("CreatorSubscriptions", fields: [creatorId], references: [id])
+  promotion   Promotion? @relation(fields: [promotionId], references: [id])
+
+  @@unique([subscriberId, creatorId])
+  @@map("subscriptions")
+}
+
+model Post {
+  id            String    @id @default(cuid())
+  creatorId     String
+  caption       String?
+  isPPV         Boolean   @default(false)
+  ppvPrice      Decimal?  @db.Decimal(10, 2)
+  isFree        Boolean   @default(false)
+  isArchived    Boolean   @default(false)
+  isPinned      Boolean   @default(false)
+  scheduledAt   DateTime?
+  publishedAt   DateTime?
+  likesCount    Int       @default(0)
+  commentsCount Int       @default(0)
+  viewsCount    Int       @default(0)
+  tipsCount     Int       @default(0)
+  createdAt     DateTime  @default(now())
+  updatedAt     DateTime  @updatedAt
+
+  creator   User       @relation(fields: [creatorId], references: [id], onDelete: Cascade)
+  media     Media[]
+  comments  Comment[]
+  likes     Like[]
+  tips      Tip[]
+  savedBy   SavedPost[]
+  ppvUnlocks PpvUnlock[]
+
+  @@map("posts")
+}
+
+model Media {
+  id           String    @id @default(cuid())
+  postId       String?
+  messageId    String?
+  type         MediaType
+  url          String
+  blurUrl      String?
+  thumbnailUrl String?
+  duration     Int?      // seconds for video/audio
+  width        Int?
+  height       Int?
+  fileSize     Int?      // bytes
+  mimeType     String?
+  order        Int       @default(0)
+  createdAt    DateTime  @default(now())
+
+  post    Post?    @relation(fields: [postId], references: [id], onDelete: Cascade)
+  message Message? @relation(fields: [messageId], references: [id], onDelete: Cascade)
+
+  @@map("media")
+}
+
+model Message {
+  id           String   @id @default(cuid())
+  senderId     String
+  receiverId   String
+  content      String?
+  isPPV        Boolean  @default(false)
+  ppvPrice     Decimal? @db.Decimal(10, 2)
+  isRead       Boolean  @default(false)
+  readAt       DateTime?
+  isDeleted    Boolean  @default(false)
+  isMassDM     Boolean  @default(false)
+  createdAt    DateTime @default(now())
+
+  sender    User        @relation("SentMessages", fields: [senderId], references: [id])
+  receiver  User        @relation("ReceivedMessages", fields: [receiverId], references: [id])
+  media     Media[]
+  ppvUnlock PpvUnlock?
+  tips      Tip[]
+
+  @@map("messages")
+}
+
+model Tip {
+  id        String   @id @default(cuid())
+  senderId  String
+  creatorId String
+  postId    String?
+  messageId String?
+  amount    Decimal  @db.Decimal(10, 2)
+  message   String?
+  createdAt DateTime @default(now())
+
+  sender  User     @relation("TipsGiven", fields: [senderId], references: [id])
+  creator User     @relation("TipsReceived", fields: [creatorId], references: [id])
+  post    Post?    @relation(fields: [postId], references: [id])
+  tipMessage Message? @relation(fields: [messageId], references: [id])
+
+  @@map("tips")
+}
+
+model TipMenuItem {
+  id              String   @id @default(cuid())
+  creatorProfileId String
+  description     String
+  amount          Decimal  @db.Decimal(10, 2)
+  emoji           String?
+  order           Int      @default(0)
+  isActive        Boolean  @default(true)
+  createdAt       DateTime @default(now())
+
+  creatorProfile CreatorProfile @relation(fields: [creatorProfileId], references: [id], onDelete: Cascade)
+
+  @@map("tip_menu_items")
+}
+
+model Comment {
+  id        String   @id @default(cuid())
+  postId    String
+  userId    String
+  content   String
+  parentId  String?
+  likesCount Int     @default(0)
+  isDeleted Boolean  @default(false)
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  post     Post      @relation(fields: [postId], references: [id], onDelete: Cascade)
+  user     User      @relation(fields: [userId], references: [id])
+  parent   Comment?  @relation("Replies", fields: [parentId], references: [id])
+  replies  Comment[] @relation("Replies")
+
+  @@map("comments")
+}
+
+model Like {
+  id        String   @id @default(cuid())
+  postId    String
+  userId    String
+  createdAt DateTime @default(now())
+
+  post Post @relation(fields: [postId], references: [id], onDelete: Cascade)
+  user User @relation(fields: [userId], references: [id])
+
+  @@unique([postId, userId])
+  @@map("likes")
+}
+
+model PpvUnlock {
+  id            String   @id @default(cuid())
+  userId        String
+  postId        String?
+  messageId     String?
+  amountPaid    Decimal  @db.Decimal(10, 2)
+  transactionId String?
+  createdAt     DateTime @default(now())
+
+  post    Post?    @relation(fields: [postId], references: [id])
+  message Message? @relation(fields: [messageId], references: [id])
+
+  @@map("ppv_unlocks")
+}
+
+model Transaction {
+  id              String            @id @default(cuid())
+  userId          String
+  type            TransactionType
+  status          TransactionStatus @default(PENDING)
+  amount          Decimal           @db.Decimal(10, 2)
+  netAmount       Decimal?          @db.Decimal(10, 2) // After platform fee
+  platformFee     Decimal?          @db.Decimal(10, 2)
+  currency        String            @default("USD")
+  stripePaymentId String?
+  stripeChargeId  String?
+  description     String?
+  metadata        Json?
+  createdAt       DateTime          @default(now())
+  updatedAt       DateTime          @updatedAt
+
+  user User @relation(fields: [userId], references: [id])
+
+  @@map("transactions")
+}
+
+model Withdrawal {
+  id            String           @id @default(cuid())
+  userId        String
+  amount        Decimal          @db.Decimal(10, 2)
+  method        WithdrawalMethod
+  status        WithdrawalStatus @default(PENDING)
+  accountDetails Json            // Encrypted bank/paypal/crypto details
+  processedAt   DateTime?
+  rejectedReason String?
+  createdAt     DateTime         @default(now())
+  updatedAt     DateTime         @updatedAt
+
+  user User @relation(fields: [userId], references: [id])
+
+  @@map("withdrawals")
+}
+
+model Wallet {
+  id               String   @id @default(cuid())
+  userId           String   @unique
+  availableBalance Decimal  @default(0) @db.Decimal(10, 2)
+  pendingBalance   Decimal  @default(0) @db.Decimal(10, 2)
+  totalEarned      Decimal  @default(0) @db.Decimal(10, 2)
+  totalWithdrawn   Decimal  @default(0) @db.Decimal(10, 2)
+  updatedAt        DateTime @updatedAt
+
+  user User @relation(fields: [userId], references: [id])
+
+  @@map("wallets")
+}
+
+model Notification {
+  id        String           @id @default(cuid())
+  userId    String
+  type      NotificationType
+  title     String
+  body      String
+  data      Json?
+  isRead    Boolean          @default(false)
+  readAt    DateTime?
+  createdAt DateTime         @default(now())
+
+  user User @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@map("notifications")
+}
+
+model BlockedUser {
+  id        String   @id @default(cuid())
+  blockerId String
+  blockedId String
+  createdAt DateTime @default(now())
+
+  blocker User @relation("Blocker", fields: [blockerId], references: [id])
+  blocked User @relation("Blocked", fields: [blockedId], references: [id])
+
+  @@unique([blockerId, blockedId])
+  @@map("blocked_users")
+}
+
+model Referral {
+  id             String   @id @default(cuid())
+  referrerId     String
+  referredId     String   @unique
+  commissionRate Decimal  @default(5) @db.Decimal(5, 2)
+  totalEarned    Decimal  @default(0) @db.Decimal(10, 2)
+  createdAt      DateTime @default(now())
+
+  referrer User @relation("Referrer", fields: [referrerId], references: [id])
+  referred User @relation("Referred", fields: [referredId], references: [id])
+
+  @@map("referrals")
+}
+
+model Promotion {
+  id              String    @id @default(cuid())
+  creatorProfileId String
+  discountPercent Int
+  durationMonths  Int
+  maxUses         Int?
+  usedCount       Int       @default(0)
+  expiresAt       DateTime?
+  isActive        Boolean   @default(true)
+  createdAt       DateTime  @default(now())
+
+  creatorProfile CreatorProfile @relation(fields: [creatorProfileId], references: [id])
+  subscriptions  Subscription[]
+
+  @@map("promotions")
+}
+
+model Bundle {
+  id              String   @id @default(cuid())
+  creatorProfileId String
+  months          Int
+  discountPercent Int
+  isActive        Boolean  @default(true)
+  createdAt       DateTime @default(now())
+
+  creatorProfile CreatorProfile @relation(fields: [creatorProfileId], references: [id])
+
+  @@map("bundles")
+}
+
+model LiveStream {
+  id           String     @id @default(cuid())
+  creatorId    String
+  title        String
+  description  String?
+  thumbnailUrl String?
+  status       LiveStatus @default(SCHEDULED)
+  isTicketed   Boolean    @default(false)
+  ticketPrice  Decimal?   @db.Decimal(10, 2)
+  viewerCount  Int        @default(0)
+  peakViewers  Int        @default(0)
+  totalTips    Decimal    @default(0) @db.Decimal(10, 2)
+  agoraChannel String?
+  recordingUrl String?
+  scheduledAt  DateTime?
+  startedAt    DateTime?
+  endedAt      DateTime?
+  createdAt    DateTime   @default(now())
+
+  creator User @relation(fields: [creatorId], references: [id])
+
+  @@map("live_streams")
+}
+
+model SavedPost {
+  id        String   @id @default(cuid())
+  userId    String
+  postId    String
+  createdAt DateTime @default(now())
+
+  user User @relation(fields: [userId], references: [id])
+  post Post @relation(fields: [postId], references: [id])
+
+  @@unique([userId, postId])
+  @@map("saved_posts")
+}
+
+model VerificationDoc {
+  id         String   @id @default(cuid())
+  userId     String
+  docType    String   // "id_front", "id_back", "selfie"
+  url        String
+  isVerified Boolean  @default(false)
+  createdAt  DateTime @default(now())
+
+  user User @relation(fields: [userId], references: [id])
+
+  @@map("verification_docs")
+}
+
+model KycVerification {
+  id          String   @id @default(cuid())
+  userId      String   @unique
+  status      String   @default("PENDING") // PENDING, APPROVED, REJECTED
+  fullName    String?
+  dateOfBirth DateTime?
+  country     String?
+  submittedAt DateTime @default(now())
+  reviewedAt  DateTime?
+  rejectionReason String?
+
+  user User @relation(fields: [userId], references: [id])
+
+  @@map("kyc_verifications")
+}
+
+model DeviceToken {
+  id        String   @id @default(cuid())
+  userId    String
+  token     String   @unique
+  platform  String   // "ios", "android", "web"
+  createdAt DateTime @default(now())
+
+  user User @relation(fields: [userId], references: [id])
+
+  @@map("device_tokens")
+}
+
+model RefreshToken {
+  id        String   @id @default(cuid())
+  userId    String
+  token     String   @unique
+  expiresAt DateTime
+  createdAt DateTime @default(now())
+
+  user User @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@map("refresh_tokens")
+}
